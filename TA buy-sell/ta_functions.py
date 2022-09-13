@@ -1,14 +1,32 @@
-from trading import Asset
-from datetime import date
+
 import numpy as np
 from scipy import stats, integrate
 import matplotlib.pyplot as plt
 import pandas as pd
 from copy import copy
+import time
+
+from func import *
 
 import warnings
 warnings.filterwarnings("ignore")
 
+def timing(func):
+    def wrapper(*arg, **kw):
+        '''source: http://www.daniweb.com/code/snippet368.html'''
+        t1 = time.time()
+        res = func(*arg, **kw)
+        t2 = time.time() - t1
+        h = int(t2 // 3600)
+        a = (t2 % 3600)
+        m = int( a / 60 )
+        s = a % 60
+        
+        print( "{}:{}:{:0.2f}".format(h, m, s ) )
+
+        return res
+
+    return wrapper 
 
 class ValueStrategy():
     def __init__(self, df, cols = ["target", "data"], **kwargs):
@@ -41,15 +59,18 @@ class ValueStrategy():
             method:
                 gaussian_kde: Works for uni-variate and multi-variate data.
         """
-        if values.isna().any():
-            values = values.dropna()
-        
+        values = values.replace( [np.inf, -np.inf], np.nan ).dropna()
+
         if len(values) == 0:
-            self.error = "No data for pdf."
-            print(self.error)
+            self.error = "No data for pdf"
+            # print(self.error)
             return
-        
-        self.pdf = stats.gaussian_kde( values )
+                
+        try:
+            self.pdf = stats.gaussian_kde( values )
+        except Exception as e:
+            self.error = str(e)
+            return
 
     def get_auc(self, **kwargs):
         """ Get area under the curve """
@@ -75,8 +96,10 @@ class ValueStrategy():
         for i in unique_values:
             self.get_pdf( self.df[ self.df[self.target] == i ][ self.data ] , **kwargs)
             if self.error is not None:
-                self.error = f"No data for pdf with target '{self.target}' = '{i}'."
-                print(self.error)
+                if "No data" in self.error:
+                    self.error += f" with target '{self.target}' = '{i}'"
+
+                # print(self.error)
                 return
 
             dist.append( self.get_dist( **kwargs ) )
@@ -89,7 +112,6 @@ class ValueStrategy():
         return {
             "distribution_similarity": self.distribution_similarity
         }[ method ]()
-
 
 class Ta:
     def __init__(self, sample = None, ta = None, params = None, move = None, func = None):
@@ -123,7 +145,7 @@ class Strategy():
         """
         # make asset Assert
         self.asset = asset
-        self.init_cols = self.asset.df.columns
+        self.init_cols = self.asset.df.columns.to_list()
         self.tas = tas
 
         self.init_vars()
@@ -135,12 +157,30 @@ class Strategy():
             "sma":self.asset.sma,
             "ema":self.asset.ema,
             "wma":self.asset.wma,
-            "dema":self.asset.dema
+            "dema":self.asset.dema,
+            "hull_ema":self.asset.hull_ema,
+            "hull_twma":self.asset.hull_ema,
+            "hull_wma":self.asset.hull_ema,
+            "tema":self.asset.tema,
         }
 
         self.OSCILLATORS_ONE_PARAM = {
-            
+            "adx":self.asset.adx,
+            "aroon":self.asset.aroon,
+            "cci":self.asset.cci,
+            "dpo":self.asset.dpo,
+            "easy_of_movement":self.asset.easy_of_movement,
+            "force_index":self.asset.force_index,
+            "keltner":self.asset.keltner,
+            "momentum":self.asset.momentum,
+            "roc":self.asset.roc,
+            "rsi":self.asset.rsi,
+            "trix":self.asset.trix,
+            "vo":self.asset.vortex_indicator,
+            "william":self.asset.william
         }
+
+        self.OSCILLATORS_MULTI_RETURN = [ "adx", "aroon" , "vo"]
 
         self.one_param_dict = {
             "trend":( self.TREND_ONE_PARAM, self.TREND_FIRST_PARAM ),
@@ -350,11 +390,10 @@ class Strategy():
         our_cols.extend( self.modified_cols )
         self.asset.df = self.asset.df[ our_cols ]
 
-    def value(self, target = 1, method = "distribution_similarity", hold = False):
+    def value(self, target = 1, method = "distribution_similarity", hold = False, verbose = False):
         """  
             hold (str): Not Implemented Yet
         """
-
         self.run_tas()
 
         # if target is list
@@ -373,39 +412,36 @@ class Strategy():
 
         for t in target:
 
+            if verbose > 0:
+                print(" - Target: ", t)
+
             self.asset.df[ "target" ] = self.asset.df[ "close" ].pct_change( t ).shift( -t ).apply( lambda x : 1 if x > 0 else 0 )
 
             for col in self.modified_cols:
+
+                if verbose > 1:
+                    print(" -- Col: ", col)
+
                 vs = ValueStrategy(self.asset.df , cols = [ "target", col ])
 
                 v = vs.value( method = method )
 
-                results.append( [ t, col, v ] )
+                range_up = self.asset.df[ self.asset.df["target"] == 1 ][ col ].quantile( [0.25, 0.75] ).values.tolist()
+                range_down = self.asset.df[ self.asset.df["target"] == 0 ][ col ].quantile( [0.25, 0.75] ).values.tolist()
 
-        self.results = pd.DataFrame(results, columns = [ "target", "col", "result" ])
+                results.append( [ t, col, v , range_up, range_down] )
+
+        self.results = pd.DataFrame(results, columns = [ "target", "col", "result" , "range_up", "range_down"])
 
         return self.results
 
 
-def new():
-    """ Get asset auxiliar function """
-    asset = Asset(
-        symbol = "AAPL",
-        broker="gbm",
-        fiat = "mx",
-        frequency="1d",
-        start = date(2019,1,1),
-        end = date(2022,5,1),
-        from_ = "db"
-    )
-
-    return asset
-
+@timing
 def test():
 
     asset = new()
 
-    st = Strategy( asset=asset )
+    st = Strategy( asset=asset, tas = "trend_oneparam" )
 
     r = st.value( target=[ 1, 2, 3, 4, 6, 12 ] )
 
@@ -415,4 +451,5 @@ def test():
 if __name__ == "__main__":
 
     r = test()
+
 
