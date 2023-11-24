@@ -358,7 +358,7 @@ class Strategy():
     def two_params(self, ta):
         raise NotImplementedError
 
-    def run_tas(self):
+    def run_tas(self, verbose = False):
         cols = []
 
         for ta in self.tas:
